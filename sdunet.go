@@ -8,10 +8,12 @@ THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR I
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"github.com/robertkrimen/otto"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/http"
 	"time"
@@ -215,18 +217,25 @@ func getRawUserInfo(scheme, server string, client *http.Client) (info map[string
 	req.Header.Add("Accept", "application/json")
 
 	q := req.URL.Query()
-	q.Add("callback", "")
+	q.Add("callback", "jQuery")
 	req.URL.RawQuery = q.Encode()
 
 	//fmt.Println(req.URL.String())
+	log.Println("[Debug] userinfo: URL = ", req.URL.String())
 
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}
+	log.Print("--DEBUG--")
 
 	defer resp.Body.Close()
 	respBody, _ := ioutil.ReadAll(resp.Body)
+
+	if bytes.Equal(respBody[0:7], []byte("jQuery(")) {
+		respBody = respBody[7:]
+		respBody = respBody[:len(respBody)-1]
+	}
 
 	if resp.StatusCode != 200 {
 		return nil, errors.New(resp.Status)
@@ -257,6 +266,9 @@ func getRawChallenge(scheme, server, rawUsername, sduIPv4 string, client *http.C
 	req.URL.RawQuery = q.Encode()
 
 	//fmt.Println(req.URL.String())
+
+	log.Println("[Debug] challenge: URL = ", req.URL.String())
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -283,6 +295,10 @@ func getSduUserInfo(scheme, server string, client *http.Client) (logined bool, s
 	}
 	errorStr := output["error"].(string)
 	sduIPv4 = output["online_ip"].(string)
+
+	log.Println("[Debug] userinfo: ip= ", sduIPv4)
+	log.Println("[Debug] userinfo: error= ", errorStr)
+
 	//fmt.Println(sduIPv4)
 	return errorStr == "ok", sduIPv4, nil
 }
@@ -292,6 +308,9 @@ func getChallengeID(scheme, server, rawUsername, sduIPv4 string, client *http.Cl
 		return "", err
 	}
 	challenge = output["challenge"].(string)
+
+	log.Println("[Debug] challenge: challenge= ", challenge)
+
 	//fmt.Println(challenge)
 	return challenge, nil
 }
@@ -318,7 +337,10 @@ func getChallengeID(scheme, server, rawUsername, sduIPv4 string, client *http.Cl
 //}
 
 func getHttpClient(strict bool, localIPv4, interfaceWtf string) (client http.Client, err error) {
-	client = http.Client{}
+
+	client = http.Client{
+		Timeout: time.Second * 10,
+	}
 	if strict {
 		var ipv4 string
 		if interfaceWtf == "" {
@@ -326,22 +348,40 @@ func getHttpClient(strict bool, localIPv4, interfaceWtf string) (client http.Cli
 		} else if localIPv4 == "" {
 			ipv4, err = GetIPv4FromInterface(interfaceWtf)
 			if err != nil {
+				log.Println("[ERROR]", err)
 				return client, err
 			}
 		} else {
 			ipv4 = localIPv4
 		}
 
-		//fmt.Println("STRICT MODE: ",ipv4+":0")
+		log.Println("[Debug] STRICT MODE: ", ipv4+"!")
 		localAddress, err := net.ResolveTCPAddr("tcp", ipv4+":0")
 		if err != nil {
+			log.Println("[ERROR]", err)
 			return client, err
 		}
+
+		log.Println("[Debug] STRICT MODE: ", localAddress.String())
+		////test
+		//d := net.Dialer{LocalAddr: localAddress}
+		//
+		//conn, err2 := d.Dial("tcp", "202.194.14.131:80")
+		//if err2 != nil {
+		//	log.Fatal(err2)
+		//}
+		//log.Println(`[Debug] conn.LocalAddr()`)
+		//log.Println("[Debug]", conn.LocalAddr())
+		//log.Println(`[Debug] conn.RemoteAddr()`)
+		//log.Println("[Debug]", conn.RemoteAddr())
+		//defer conn.Close()
+		//
+		////
 
 		//https://stackoverflow.com/questions/30552447/how-to-set-which-ip-to-use-for-a-http-request
 		// Create a transport like http.DefaultTransport, but with a specified localAddr
 
-		client.Transport = &http.Transport{
+		t := &http.Transport{
 			Proxy: http.ProxyFromEnvironment,
 			DialContext: (&net.Dialer{
 				Timeout:   30 * time.Second,
@@ -354,6 +394,9 @@ func getHttpClient(strict bool, localIPv4, interfaceWtf string) (client http.Cli
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 1 * time.Second,
 		}
+		////是否是池的问题？？
+		//t.CloseIdleConnections()
+		client.Transport = t
 
 	}
 	return client, nil
@@ -392,6 +435,7 @@ func loginDigest(scheme, server, rawUsername, rawPassword, sduIPv4 string, clien
 	req.URL.RawQuery = q.Encode()
 
 	//fmt.Println(req.URL.String())
+	log.Println("[Debug] login: URL = ", req.URL.String())
 
 	resp, err := client.Do(req)
 	if err != nil {
